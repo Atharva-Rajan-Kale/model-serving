@@ -24,7 +24,6 @@ cp your_model_file.tar.gz test_model/
 docker run -p 5000:5000 -v $(pwd)/test_model:/opt/ml/model autogluon-mlflow:1.3.1-cpu serve
 ```
 
-**Note**: The `test_model/` directory is gitignored since model files are typically large and shouldn't be in version control.
 
 ## API Endpoints
 

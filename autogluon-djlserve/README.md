@@ -24,7 +24,6 @@ cp your_model_file.tar.gz test_model/
 docker run -p 8080:8080 -p 8081:8081 -v $(pwd)/test_model:/opt/ml/model autogluon-djlserve:1.3.1-cpu serve
 ```
 
-**Note**: The `test_model/` directory is gitignored since model files are typically large and shouldn't be in version control.
 
 ## Files
 

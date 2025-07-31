@@ -32,6 +32,11 @@ RUN pip install --no-cache-dir -U --trusted-host pypi.org --trusted-host files.p
  && pip install --no-cache-dir "fastai>=2.8.0,<2.9.0" \
  && pip install --no-cache-dir "ninja<1.11.1.1"
 
+# Explicitly remove torchserve to ensure DJLServing is used instead
+RUN pip uninstall -y torchserve torch-model-archiver torch-workflow-archiver || true \
+ && apt-get remove -y torchserve || true \
+ && rm -rf /usr/local/bin/torchserve /usr/local/bin/torch-model-archiver /usr/local/bin/torch-workflow-archiver
+
 # Install Java 17 (required for DJLServing 0.28.0+)
 RUN apt-get update \
  && apt-get install -y openjdk-17-jdk \
