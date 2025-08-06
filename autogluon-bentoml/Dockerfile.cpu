@@ -61,6 +61,6 @@ RUN HOME_DIR=/root \
 
 RUN curl -o /licenses-autogluon.txt https://autogluon.s3.us-west-2.amazonaws.com/licenses/THIRD-PARTY-LICENSES.txt
 
-EXPOSE 3000
+EXPOSE 8080
 ENTRYPOINT ["python", "/usr/local/bin/dockerd-entrypoint.py"]
 CMD ["serve"]

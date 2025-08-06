@@ -1,24 +1,58 @@
 #!/bin/bash
 
 MODEL_DIR="/opt/ml/model"
-CUSTOM_MODEL_DIR="${MODEL_DIR}/custom_model"
+# Use /tmp for custom_model since /opt/ml/model is read-only
+CUSTOM_MODEL_DIR="/tmp/custom_model"
 
-# Look for the original model file
-MODEL_FILE=""
-if [ -f "${MODEL_DIR}/model_1.3.1.tar.gz" ]; then
-    MODEL_FILE="${MODEL_DIR}/model_1.3.1.tar.gz"
+echo "DEBUG: Contents of ${MODEL_DIR}:"
+ls -la "${MODEL_DIR}"
+
+# Check if SageMaker has already extracted the model (which it does automatically)
+if [ -f "${MODEL_DIR}/model.py" ] && [ -f "${MODEL_DIR}/learner.pkl" ]; then
+    echo "DEBUG: Model already extracted by SageMaker, using existing files"
+    # SageMaker has already extracted the model, just use the custom_model directory structure
+    rm -rf "${CUSTOM_MODEL_DIR}"
+    mkdir -p "${CUSTOM_MODEL_DIR}"
+    
+    # Copy all model files to custom_model directory
+    cp -r "${MODEL_DIR}"/* "${CUSTOM_MODEL_DIR}/" 2>/dev/null || true
+    
+    echo "DEBUG: Contents of ${CUSTOM_MODEL_DIR} after copying:"
+    ls -la "${CUSTOM_MODEL_DIR}"
+    
+elif [ -f "${MODEL_DIR}/model_1.3.1.tar.gz" ]; then
+    echo "DEBUG: Found model_1.3.1.tar.gz, extracting..."
+    rm -rf "${CUSTOM_MODEL_DIR}"
+    mkdir -p "${CUSTOM_MODEL_DIR}"
+    tar -xf "${MODEL_DIR}/model_1.3.1.tar.gz" -C "${CUSTOM_MODEL_DIR}"
+    
 elif [ -f "${MODEL_DIR}/model.tar.gz" ]; then
-    MODEL_FILE="${MODEL_DIR}/model.tar.gz"
+    echo "DEBUG: Found model.tar.gz, extracting..."
+    rm -rf "${CUSTOM_MODEL_DIR}"
+    mkdir -p "${CUSTOM_MODEL_DIR}"
+    tar -xf "${MODEL_DIR}/model.tar.gz" -C "${CUSTOM_MODEL_DIR}"
+    
 else
+    echo "ERROR: No model file or extracted model found in ${MODEL_DIR}"
+    echo "Looking for: model_1.3.1.tar.gz, model.tar.gz, or extracted model files"
     exit 1
 fi
 
-# Setup model structure
-rm -rf "${CUSTOM_MODEL_DIR}"
-mkdir -p "${CUSTOM_MODEL_DIR}"
-# In setup_model.sh, after extraction:
-tar -xf "${MODEL_FILE}" -C "${CUSTOM_MODEL_DIR}" --strip-components=1
-rm "${MODEL_FILE}"  # Remove the original tar file
+echo "DEBUG: Final contents of ${CUSTOM_MODEL_DIR}:"
+ls -la "${CUSTOM_MODEL_DIR}"
+
+# Verify required files exist
+if [ ! -f "${CUSTOM_MODEL_DIR}/model.py" ]; then
+    echo "ERROR: model.py not found in ${CUSTOM_MODEL_DIR}"
+    exit 1
+fi
+
+if [ ! -f "${CUSTOM_MODEL_DIR}/learner.pkl" ]; then
+    echo "ERROR: learner.pkl not found in ${CUSTOM_MODEL_DIR}"
+    exit 1
+fi
+
+echo "DEBUG: Setup completed successfully"
 
 # Copy or create model.py
 MODEL_PY_SOURCE="/opt/ml/code/model.py"

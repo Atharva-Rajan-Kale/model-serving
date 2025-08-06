@@ -7,12 +7,13 @@ import os
 import tarfile
 from typing import Dict, Any, Union, List
 from io import StringIO
+import json
 
 # Model extraction and loading logic
 def load_autogluon_model():
     """Extract and load the AutoGluon model"""
-    model_dir = "/opt/ml/model"
-    extracted_dir = "/opt/ml/model/extracted_model"
+    model_dir = os.environ.get("MODEL_PATH", "/opt/ml/model")
+    extracted_dir = os.path.join(model_dir, "extracted_model")
     
     # Check if model is already extracted
     if os.path.exists(extracted_dir):
@@ -33,35 +34,56 @@ def load_autogluon_model():
     with tarfile.open(model_file, 'r:gz') as tar:
         tar.extractall(extracted_dir)
     
-    # Remove the tar file to save space
-    os.remove(model_file)
-    
     # Load the AutoGluon model
     return TabularPredictor.load(extracted_dir, require_py_version_match=False)
 
-# Load the model once at startup
-model = load_autogluon_model()
-
-# Create BentoML service using the modern v1.4+ API
+# Create BentoML service
 @bentoml.service(
-    name="autogluon_predictor",
-    resources={"cpu": "1000m", "memory": "2Gi"}
+    resources={"cpu": "2", "memory": "4Gi"},
+    traffic={"timeout": 300}
 )
 class AutoGluonService:
     
-    @bentoml.api
-    def predict(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Predict using AutoGluon model"""
+    def __init__(self):
+        self.model = None
+    
+    def _get_model(self):
+        """Lazy load the model when first needed"""
+        if self.model is None:
+            self.model = load_autogluon_model()
+        return self.model
+    
+    def _predict_logic(self, input_data):
+        """Core prediction logic"""
         try:
-            # Handle different input formats
-            if "instances" in input_data:
+            # Handle CSV string input
+            if isinstance(input_data, str):
+                data = pd.read_csv(StringIO(input_data))
+            # Handle different JSON input formats
+            elif isinstance(input_data, list):
+                # Direct list of records (batch format)
+                data = pd.DataFrame(input_data)
+            elif "instances" in input_data:
+                # Wrapped in instances key
                 if isinstance(input_data["instances"], list):
                     data = pd.DataFrame(input_data["instances"])
                 else:
                     data = pd.DataFrame([input_data["instances"]])
+            elif isinstance(input_data, dict) and len(input_data) > 0:
+                # Check if it's a single record or contains batch data
+                first_value = next(iter(input_data.values()))
+                if isinstance(first_value, list) and len(first_value) > 0 and isinstance(first_value[0], (int, float, str)):
+                    # This looks like batch data where each key has a list of values
+                    data = pd.DataFrame(input_data)
+                else:
+                    # Single record
+                    data = pd.DataFrame([input_data])
             else:
                 data = pd.DataFrame([input_data])
             
+            # Get the model (lazy loading)
+            model = self._get_model()
+            
             # Make predictions
             if model.problem_type != REGRESSION:
                 pred_proba = model.predict_proba(data, as_pandas=True)
@@ -83,58 +105,45 @@ class AutoGluonService:
                 "model_info": {
                     "problem_type": str(model.problem_type),
                     "num_features": len(model.feature_metadata_in.get_features()),
-                    "feature_names": model.feature_metadata_in.get_features()
+                    "feature_names": model.feature_metadata_in.get_features(),
+                    "batch_size": len(data)
                 }
             }
             
         except Exception as e:
             return {"error": str(e), "predictions": []}
-
+    
     @bentoml.api
-    def predict_csv(self, csv_data: str) -> Dict[str, Any]:
-        """Predict using CSV input data"""
-        try:
-            data = pd.read_csv(StringIO(csv_data))
-            
-            # Make predictions
-            if model.problem_type != REGRESSION:
-                pred_proba = model.predict_proba(data, as_pandas=True)
-                pred = get_pred_from_proba_df(pred_proba, problem_type=model.problem_type)
-                pred_proba.columns = [str(c) + "_proba" for c in pred_proba.columns]
-                pred.name = str(pred.name) + "_pred" if pred.name is not None else "pred"
-                prediction = pd.concat([pred, pred_proba], axis=1)
-            else:
-                prediction = model.predict(data, as_pandas=True)
-                
-            if isinstance(prediction, pd.Series):
-                prediction = prediction.to_frame()
-            
-            # Convert to JSON-serializable format
-            result = prediction.to_dict(orient='records')
-            
-            return {
-                "predictions": result,
-                "model_info": {
-                    "problem_type": str(model.problem_type),
-                    "num_features": len(model.feature_metadata_in.get_features()),
-                    "feature_names": model.feature_metadata_in.get_features()
-                }
-            }
-            
-        except Exception as e:
-            return {"error": str(e), "predictions": []}
+    def predict(self, input_data: Union[Dict[str, Any], List[Dict[str, Any]], str]) -> Dict[str, Any]:
+        """Standard BentoML prediction endpoint"""
+        return self._predict_logic(input_data)
 
     @bentoml.api
     def health(self) -> Dict[str, Union[str, bool]]:
         """Health check endpoint"""
-        return {"status": "healthy", "model_loaded": True}
+        return {"status": "healthy"}
 
     @bentoml.api
     def model_info(self) -> Dict[str, Any]:
         """Get model information"""
-        return {
-            "problem_type": str(model.problem_type),
-            "num_features": len(model.feature_metadata_in.get_features()),
-            "feature_names": model.feature_metadata_in.get_features(),
-            "model_path": "/opt/ml/model/extracted_model"
-        }
+        try:
+            model = self._get_model()
+            return {
+                "problem_type": str(model.problem_type),
+                "num_features": len(model.feature_metadata_in.get_features()),
+                "feature_names": model.feature_metadata_in.get_features(),
+                "model_path": os.environ.get("MODEL_PATH", "/opt/ml/model")
+            }
+        except Exception as e:
+            return {"error": str(e), "model_loaded": False}
+
+    # Additional endpoints for SageMaker compatibility
+    @bentoml.api
+    def ping(self) -> Dict[str, str]:
+        """SageMaker health check endpoint (accessible at /ping)"""
+        return {"status": "healthy"}
+
+    @bentoml.api  
+    def invocations(self, input_data: Union[Dict[str, Any], List[Dict[str, Any]], str]) -> Dict[str, Any]:
+        """SageMaker prediction endpoint (accessible at /invocations)"""
+        return self._predict_logic(input_data)
